@@ -11,6 +11,7 @@ from utils.model_utils import load_g, load_from_pkl_model
 
 DEVICE = 'cuda:0'
 ALPHA = 5
+BATCH_SIZE = 4
 
 def get_w(z, mapping):
     return mapping.forward(z, c=18)
@@ -32,18 +33,25 @@ def simple_preprocess(n_px):
 
 def get_image_features(styles_vec, synthesis, affine_layers, clip_model, clip_preprocess):
     image_features = None
-    for i in range(styles_vec.shape[0]):
-        style = vec_to_styles(styles_vec[i], affine_layers)
-        tensor = synthesis.forward(style, style_input=True, noise_mode='const', force_fp32=True).detach().squeeze()
+    batch_num = int(np.ceil(styles_vec.shape[0] / BATCH_SIZE))
+
+    # for i in range(styles_vec.shape[0]):
+    for bi in range(batch_num):
+        batch_start = bi * BATCH_SIZE
+        batch_end = min(batch_start + BATCH_SIZE, styles_vec.shape[0])
+
+        batch_style = vec_to_styles(styles_vec[batch_start:batch_end], affine_layers)
+        tensor = synthesis.forward(batch_style, style_input=True, noise_mode='const', force_fp32=True).detach()
+
         # pil = tensor2pil(tensor)
         # image = clip_preprocess(pil).detach().unsqueeze(0).to(DEVICE)
-        image = clip_preprocess(tensor).detach().unsqueeze(0).to(DEVICE)
-        image_feature = clip_model.encode_image(image).detach()
+        batch_image = clip_preprocess(tensor).detach().to(DEVICE)
+        batch_image_feature = clip_model.encode_image(batch_image).detach()
 
         if image_features is None:
-            image_features = image_feature
+            image_features = batch_image_feature
         else:
-            image_features = torch.concat((image_features, image_feature), dim=0)
+            image_features = torch.cat((image_features, batch_image_feature), dim=0)
 
     return image_features
 

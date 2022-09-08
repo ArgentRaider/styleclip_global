@@ -41,18 +41,30 @@ def to_styles(edit: torch.Tensor, affine_layers):
 
 def vec_to_styles(edit: torch.Tensor, affine_layers):
     '''
-        Divide a long vector into different layers of StyleSpace.
-        Each layer has an additional 'batch_size' dimension.
+        Divide a long vector (or a batch) into different layers of StyleSpace.
+        Compared to 'to_styles', each layer has an additional 'batch_size' dimension.
     '''
     idx = 0
     styles = []
     for layer, is_conv in affine_layers:
         layer_dim = layer.weight.shape[0]
         if is_conv:
-            styles.append(edit[idx:idx + layer_dim].clone().unsqueeze(0))
+            if len(edit.shape) == 1:
+                styles.append(edit[idx:idx + layer_dim].clone().unsqueeze(0))
+            elif len(edit.shape) == 2:
+                styles.append(edit[:, idx:idx + layer_dim].clone())
+            else:
+                print("Invalid shape", edit.shape, ", input tensor 'edit' should be 1-dim of 2-dim.")
+                exit(-1)
             idx += layer_dim
         else:
-            styles.append(torch.zeros(layer_dim, device=edit.device, dtype=edit.dtype).unsqueeze(0))
+            if len(edit.shape) == 1:
+                styles.append(torch.zeros(layer_dim, device=edit.device, dtype=edit.dtype).unsqueeze(0))
+            elif len(edit.shape) == 2:
+                styles.append(torch.zeros((edit.shape[0], layer_dim), device=edit.device, dtype=edit.dtype))
+            else:
+                print("Invalid shape", edit.shape, ", input tensor 'edit' should be 1-dim of 2-dim.")
+                exit(-1)
 
     return styles
 
