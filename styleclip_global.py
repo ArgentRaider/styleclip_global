@@ -5,7 +5,7 @@ import pickle
 import clip
 from PIL import Image
 import tqdm
-from utils.edit_utils import get_affine_layers, to_styles, vec_to_styles, w_to_styles, styles_to_vec
+from utils.edit_utils import get_affine_layers, vec_to_styles, w_to_styles, styles_to_vec
 from utils.image_utils import tensor2pil
 from utils.model_utils import load_g, load_from_pkl_model
 
@@ -15,7 +15,6 @@ BATCH_SIZE = 4
 
 def get_w(z, mapping):
     return mapping.forward(z, c=18)
-
 
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 try:
@@ -32,6 +31,7 @@ def simple_preprocess(n_px):
     ])
 
 def get_image_features(styles_vec, synthesis, affine_layers, clip_model, clip_preprocess):
+    global time_clip, time_preprocess
     image_features = None
     batch_num = int(np.ceil(styles_vec.shape[0] / BATCH_SIZE))
 
@@ -40,19 +40,21 @@ def get_image_features(styles_vec, synthesis, affine_layers, clip_model, clip_pr
         batch_start = bi * BATCH_SIZE
         batch_end = min(batch_start + BATCH_SIZE, styles_vec.shape[0])
 
+        
         batch_style = vec_to_styles(styles_vec[batch_start:batch_end], affine_layers)
-        tensor = synthesis.forward(batch_style, style_input=True, noise_mode='const', force_fp32=True).detach()
+        tensor = synthesis.forward(batch_style, style_input=True, noise_mode='const').add(1).div(2).clip(0,1).detach()
 
         # pil = tensor2pil(tensor)
         # image = clip_preprocess(pil).detach().unsqueeze(0).to(DEVICE)
         batch_image = clip_preprocess(tensor).detach().to(DEVICE)
+        
         batch_image_feature = clip_model.encode_image(batch_image).detach()
-
+        
         if image_features is None:
             image_features = batch_image_feature
         else:
             image_features = torch.cat((image_features, batch_image_feature), dim=0)
-
+    
     return image_features
 
 
@@ -82,7 +84,7 @@ def _main(model_path, output_path):
     rand_w = get_w(rand_z, mapping)
     rand_styles = w_to_styles(rand_w, affine_layers)
 
-    rand_styles_vec = styles_to_vec(rand_styles, affine_layers)
+    rand_styles_vec, conv_channels = styles_to_vec(rand_styles, affine_layers)
     std = torch.std(rand_styles_vec, dim=0, unbiased=True)
 
     print("Calculating original image features...")
@@ -91,11 +93,16 @@ def _main(model_path, output_path):
     print("Calculating di for each channel...")
 
     di_all = None
-    for ci in tqdm.tqdm(range(rand_styles_vec.shape[1])):
-        styles_vec_delta = rand_styles_vec.clone()
-        styles_vec_delta[:, ci] += ALPHA * std[ci]
+    for ci in tqdm.tqdm(conv_channels):
+        rand_styles_vec[:, ci] += ALPHA * std[ci]
+        i1 = get_image_features(rand_styles_vec, synthesis, affine_layers, model, preprocess)
 
-        i1 = get_image_features(styles_vec_delta, synthesis, affine_layers, model, preprocess)
+        # rand_styles_vec[:, ci] -= (2*ALPHA) * std[ci]
+        # i0 = get_image_features(rand_styles_vec, synthesis, affine_layers, model, preprocess)
+
+        # rand_styles_vec[:, ci] += ALPHA * std[ci]
+        rand_styles_vec[:, ci] -= ALPHA * std[ci]
+
         di = i1 - i0
         di = torch.mean(di, dim=0)
         di = di / torch.norm(di)
@@ -103,7 +110,7 @@ def _main(model_path, output_path):
             di_all = di
         else:
             di_all = torch.vstack((di_all, di))
-    print(di_all.shape)
+    print(di_all.shape)         # (6048, 512)
     di_all = di_all.cpu().numpy()
     np.save(output_path, di_all)
 
